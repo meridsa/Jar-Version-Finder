@@ -1,2 +1,6 @@
 #ignore testArea
 testArea/
+
+#ignore jars
+*.jar
+
