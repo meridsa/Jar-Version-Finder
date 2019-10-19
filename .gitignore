@@ -4,3 +4,8 @@ testArea/
 #ignore jars
 *.jar
 
+#ignore python notebooks
+*.ipynb
+
+#ignore shell scripts
+*.sh
