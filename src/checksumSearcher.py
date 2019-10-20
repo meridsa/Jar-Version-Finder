@@ -22,29 +22,39 @@ import os
 import hashlib
 from pathlib import Path
 
-def findSha1sumHash(jarfilename):
+
+
+def findSha1sumHash(pathAndFile):
 	"""Hashes files with sha 1 sum and returns it"""
 	BLOCKSIZE = 65565
 	hasher = hashlib.sha1()
-	with open(jarfilename, 'rb') as afile:
-		try:
-			buf = afile.read(BLOCKSIZE)
-			while len(buf) > 0:
-				hasher.update(buf)
+	try:
+		with open(pathAndFile, 'rb') as afile:
+			try:
 				buf = afile.read(BLOCKSIZE)
-		except:
-			print('{} too large, cannot hash so will be empty in final csv\n'.format(jarfilename))
-			return '0'*40
+				while len(buf) > 0:
+					hasher.update(buf)
+					buf = afile.read(BLOCKSIZE)
+			except:
+				print('{} too large, cannot hash so will be empty in final csv\n'.format(pathAndFile))
+				return '0'*40
+	except OSError:
+		print('Did not find file {}, continuing'.format(pathAndFile))
 	return str(hasher.hexdigest())
 
-def findWantedFilesInDirectory(directory, wantedFileTypes=['.jar', '.ear', '.war']):
+def findWantedFilesInDirectory(directory, args, wantedFileTypes=['.jar', '.ear', '.war']):
 	"""Finds all wanted file types in a directory and makes a list of dictionaries with their names and sha 1 sums"""
 	fileAndSha1sumDict = []
-	for file in os.listdir(directory):
-		for wantedFileType in wantedFileTypes:
-			if file.endswith(wantedFileType):
-				sha1sum = findSha1sumHash(file)
-				fileAndSha1sumDict.append({'File': file, 'sha1sum': sha1sum})
+	try:
+		for file in os.listdir(directory):
+			for wantedFileType in wantedFileTypes:
+				if file.endswith(wantedFileType):
+					if args.verbose:
+						print('Adding {}'.format(file))
+					sha1sum = findSha1sumHash(os.path.join(directory, file))
+					fileAndSha1sumDict.append({'File': file, 'sha1sum': sha1sum})
+	except OSError:
+		print('Directory {} not found, continuing.'.format(directory))
 	return fileAndSha1sumDict
 
 
@@ -89,27 +99,46 @@ def concatDictsInDataFrame(rawDataList, collectedDataList):
 			})
 	return finalCorrectlyFormatedListOfDicts
 
-def main(argv):
+def main():
 	targetDirectory = os.getcwd()
 	recursiveDepth=1
 	test = True
+	#Can argparse be in a function?
+	parser = argparse.ArgumentParser()
+	parser.add_argument("-t", "--test", help="Test option: does not write file only show example output of file for current directory.\n" 
+						+ " If there are no jars etc. in the current directory the test header will be empty will be empty.",
+                    action="store_true")
+	parser.add_argument("-d", "--directory", type=str, help="Sets target directory by path you provide after option.")
+	parser.add_argument("-v", "--verbose", help="increases verbosity", action="store_true")
+	parser.add_argument("-r", "--recursive", type=int, help="Recursive search with max depth")
+	args = parser.parse_args()
+	if args.directory:
+		targetDirectory = os.path.join(targetDirectory, args.directory)
+	if args.verbose:
+		print("Target directory set to \"{}\".".format(targetDirectory))
+
 	# no options is only current directory
-	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running
-	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10
-	# -d targets a directory, followed by directory path, if omitted fails
+	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running #
+	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10 #
+	# -d targets a directory, followed by directory path, if omitted fails #
 	# -h is help
-	listRawData = findWantedFilesInDirectory(targetDirectory)
+	listRawData = findWantedFilesInDirectory(targetDirectory, args)
 	listFoundDictData = []
 	for dictRawData in listRawData:
 		listFoundDictData.append(checkSha1sumAgainstRepo(dictRawData['sha1sum']))
 	resultList = concatDictsInDataFrame(listRawData, listFoundDictData)
 	dfResult = pd.DataFrame(resultList)
-	if test:
+	if args.test:
+		print('Testing, nothing will be saved')
 		print(dfResult.head())
 	else:
 		# save pandas dataframe to a csv that you can name
 		defaultFileName = "jarInFolderInformation"
-		filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\n".format(defaultFileName)))
+		filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\nEnter \'q\' to quit without saving.\n".format(defaultFileName)))
+		if filename == 'q':
+			sys.exit(0)
+		if not filename:
+			filename = defaultFileName
 		filename = filename + ".csv"
 		with open(filename, "w+") as outFile:
 			dfResult.to_csv(filename, sep="\t")
@@ -119,7 +148,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
-	main(sys.argv)
+	main()
 
 
 
