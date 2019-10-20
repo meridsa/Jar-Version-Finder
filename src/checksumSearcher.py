@@ -17,24 +17,36 @@
 import requests
 from datetime import datetime
 import pandas as pd
-import sys
+import sys, argparse
 import os
 import hashlib
+from pathlib import Path
 
 def findSha1sumHash(jarfilename):
+	"""Hashes files with sha 1 sum and returns it"""
 	BLOCKSIZE = 65565
 	hasher = hashlib.sha1()
 	with open(jarfilename, 'rb') as afile:
-	    try:
-	        buf = afile.read(BLOCKSIZE)
-	        while len(buf) > 0:
-	            hasher.update(buf)
-	            buf = afile.read(BLOCKSIZE)
-	    except:
-	        print('{} too large, cannot hash so will be empty in final csv\n'.format(jarfilename))
-	        return '0'*40
+		try:
+			buf = afile.read(BLOCKSIZE)
+			while len(buf) > 0:
+				hasher.update(buf)
+				buf = afile.read(BLOCKSIZE)
+		except:
+			print('{} too large, cannot hash so will be empty in final csv\n'.format(jarfilename))
+			return '0'*40
 	return str(hasher.hexdigest())
-	
+
+def findWantedFilesInDirectory(directory, wantedFileTypes=['.jar', '.ear', '.war']):
+	"""Finds all wanted file types in a directory and makes a list of dictionaries with their names and sha 1 sums"""
+	fileAndSha1sumDict = []
+	for file in os.listdir(directory):
+		for wantedFileType in wantedFileTypes:
+			if file.endswith(wantedFileType):
+				sha1sum = findSha1sumHash(file)
+				fileAndSha1sumDict.append({'File': file, 'sha1sum': sha1sum})
+	return fileAndSha1sumDict
+
 
 def checkSha1sumAgainstRepo(sha1sum):
 	"""checks maven central for sha1sum, if not found returns dict with not found as all values"""
@@ -58,58 +70,56 @@ def checkSha1sumAgainstRepo(sha1sum):
 	date = datetime.fromtimestamp(timestamp) 
 	dateString = date.strftime("%M-%Y")
 	return {"groupId": groupId,
-	"artifactId": artifactId,
-	"version": version,
-	"filetype": filetype,
-	"date uploaded": dateString}
-
-# opens tempcsv file (see JarVersionFinder.sh) and inserts data in a pandas
-# dataframe
-
-listOfJars = []
-listOfDictsOfJarsAndSha1Sum = []
-
-for file in os.listdir(os.getcwd()):
-    if file.endswith(".jar"):
-        listOfJars.append(file)
-
-for jarfile in listOfJars:
-	sha1sum = findSha1sumHash(jarfile)
-	listOfDictsOfJarsAndSha1Sum.append({'Jar': jarfile.rstrip('.jar'), 'sha1sum': sha1sum})
-
-# Loops through Checksum and insert sha1sum into standard url to obtain JSON object which is
-# processed into a dictionary (see checkSha1sumAgainstRepo) which is appended to a list
-
-listOfDicts = []
-for totalDict in listOfDictsOfJarsAndSha1Sum:
-    listOfDicts.append(checkSha1sumAgainstRepo(totalDict['sha1sum']))
-
-# Make final list of dicts containing
-# Jar, groupId, artifactId, version, date, type, sha1sum
-
-finalCorrectlyFormatedListOfDicts = []
-for checksumedDict, rawDataDict in zip(listOfDicts, listOfDictsOfJarsAndSha1Sum):
-	finalCorrectlyFormatedListOfDicts.append({
-		'Jar': rawDataDict['Jar'],
-		'groupId': checksumedDict['groupId'],
-		'artifactId': checksumedDict['artifactId'],
-		'version': checksumedDict['version'],
-		'Release Date': checksumedDict['date uploaded'],
-		'type': checksumedDict['filetype'],
-		'sha1sum': rawDataDict['sha1sum']
-		})
+		"artifactId": artifactId,
+		"version": version,
+		"filetype": filetype,
+		"date uploaded": dateString}
 
 
-# Concats raw data with found data to make result
-dfResult = pd.DataFrame(finalCorrectlyFormatedListOfDicts)
+def concatDictsInDataFrame(rawDataList, collectedDataList):
+	finalCorrectlyFormatedListOfDicts = []
+	for collectedData, rawData in zip(collectedDataList, rawDataList):
+		finalCorrectlyFormatedListOfDicts.append({
+			'File': rawData['File'],
+			'groupId': collectedData['groupId'],
+			'artifactId': collectedData['artifactId'],
+			'version': collectedData['version'],
+			'Release Date': collectedData['date uploaded'],
+			'sha1sum': rawData['sha1sum']
+			})
+	return finalCorrectlyFormatedListOfDicts
 
-# save pandas dataframe to a csv that you can name
-defaultFileName = "jarInFolderInformation"
-filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\n".format(defaultFileName)))
-filename = filename + ".csv"
+def main(argv):
+	targetDirectory = os.getcwd()
+	recursiveDepth=1
+	test = True
+	# no options is only current directory
+	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running
+	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10
+	# -d targets a directory, followed by directory path, if omitted fails
+	# -h is help
+	listRawData = findWantedFilesInDirectory(targetDirectory)
+	listFoundDictData = []
+	for dictRawData in listRawData:
+		listFoundDictData.append(checkSha1sumAgainstRepo(dictRawData['sha1sum']))
+	resultList = concatDictsInDataFrame(listRawData, listFoundDictData)
+	dfResult = pd.DataFrame(resultList)
+	if test:
+		print(dfResult.head())
+	else:
+		# save pandas dataframe to a csv that you can name
+		defaultFileName = "jarInFolderInformation"
+		filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\n".format(defaultFileName)))
+		filename = filename + ".csv"
+		with open(filename, "w+") as outFile:
+			dfResult.to_csv(filename, sep="\t")
 
-with open(filename, "w+") as outFile:
-	dfResult.to_csv(filename, sep="\t")
+
+	
+
+
+if __name__ == "__main__":
+	main(sys.argv)
 
 
 
@@ -175,3 +185,4 @@ with open(filename, "w+") as outFile:
 	}
 }
 """
+

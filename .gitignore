@@ -1,2 +1,5 @@
 #ignore testArea
 testArea/
+
+#ignore .DS_Store
+.DS_Store
