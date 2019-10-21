@@ -119,7 +119,9 @@ def main():
 
 	# no options is only current directory
 	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running #
-	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10 #
+	# -v verbose
+	# -f to check wanted file types by listing them after
+	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10 
 	# -d targets a directory, followed by directory path, if omitted fails #
 	# -h is help
 	listRawData = findWantedFilesInDirectory(targetDirectory, args)

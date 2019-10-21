@@ -3,3 +3,6 @@ testArea/
 
 #ignore .DS_Store
 .DS_Store
+
+#ignore all output csv's
+.csv
