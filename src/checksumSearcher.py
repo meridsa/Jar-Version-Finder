@@ -11,30 +11,61 @@
 	Version 2.0: Using only python script
 """
 
-#------- IN TESTING AND EARLY DEV STAGE
+# ------- IN TESTING AND EARLY DEV STAGE
 
 # import statements
 import requests
 from datetime import datetime
 import pandas as pd
-import sys
+import sys, argparse
 import os
 import hashlib
 
-def findSha1sumHash(jarfilename):
+def findSha1sumHash(pathAndFile):
+	"""Hashes files with sha 1 sum and returns it"""
 	BLOCKSIZE = 65565
 	hasher = hashlib.sha1()
-	with open(jarfilename, 'rb') as afile:
-	    try:
-	        buf = afile.read(BLOCKSIZE)
-	        while len(buf) > 0:
-	            hasher.update(buf)
-	            buf = afile.read(BLOCKSIZE)
-	    except:
-	        print('{} too large, cannot hash so will be empty in final csv\n'.format(jarfilename))
-	        return '0'*40
+	try:
+		with open(pathAndFile, 'rb') as afile:
+			try:
+				buf = afile.read(BLOCKSIZE)
+				while len(buf) > 0:
+					hasher.update(buf)
+					buf = afile.read(BLOCKSIZE)
+			except:
+				print('{} too large, cannot hash so will be empty in final csv\n'.format(pathAndFile))
+				return '0' * 40
+	except OSError:
+		print('Did not find file {}, continuing'.format(pathAndFile))
 	return str(hasher.hexdigest())
-	
+
+
+def find_wanted_files_in_directories(root_dir, args):
+	if args.recursive:
+		return find_wanted_files_in_directory(root_dir, args, args.recursive)
+	else:
+		return find_wanted_files_in_directory(root_dir, args)
+
+
+def find_wanted_files_in_directory(directory, args, depth=0, wantedFileTypes=['.jar', '.ear', '.war']):
+	"""Finds all wanted file types in a directory and makes a list of dictionaries with their names and sha 1 sums"""
+	find_sha1_sum_dict = []
+	try:
+		for entry in os.scandir(directory):
+			if entry.is_dir(follow_symlinks=False):
+				if depth > 0:
+					find_sha1_sum_dict.extend(find_wanted_files_in_directory(entry.path, args, depth - 1))
+			elif entry.is_file(follow_symlinks=False):
+				for wantedFileType in wantedFileTypes:
+					if entry.name.endswith(wantedFileType):
+						if args.verbose:
+							print('Adding {}'.format(entry.name))
+						sha1sum = findSha1sumHash(os.path.join(directory, entry.name))
+						find_sha1_sum_dict.append({'File': entry.name, 'sha1sum': sha1sum})
+	except OSError:
+		print('Directory {} not found, continuing.'.format(directory))
+	return find_sha1_sum_dict
+
 
 def checkSha1sumAgainstRepo(sha1sum):
 	"""checks maven central for sha1sum, if not found returns dict with not found as all values"""
@@ -44,75 +75,91 @@ def checkSha1sumAgainstRepo(sha1sum):
 	if json_data['response']['numFound'] == 0:
 		# This means something went wrong.
 		return {"groupId": "not found",
-			"artifactId": "not found",
-			"version": "not found",
-			"filetype": "not found",
-			"date uploaded": "not found"}
+				"artifactId": "not found",
+				"version": "not found",
+				"filetype": "not found",
+				"date uploaded": "not found"}
 	docs = json_data['response']['docs'][0]
 	groupId = docs['g']
 	artifactId = docs['a']
 	version = docs['v']
 	filetype = docs['p']
-	timestamp = docs['timestamp']/1000
+	timestamp = docs['timestamp'] / 1000
 	# convert timestamp into date format month-year
-	date = datetime.fromtimestamp(timestamp) 
+	date = datetime.fromtimestamp(timestamp)
 	dateString = date.strftime("%M-%Y")
 	return {"groupId": groupId,
-	"artifactId": artifactId,
-	"version": version,
-	"filetype": filetype,
-	"date uploaded": dateString}
+			"artifactId": artifactId,
+			"version": version,
+			"filetype": filetype,
+			"date uploaded": dateString}
 
-# opens tempcsv file (see JarVersionFinder.sh) and inserts data in a pandas
-# dataframe
 
-listOfJars = []
-listOfDictsOfJarsAndSha1Sum = []
-
-for file in os.listdir(os.getcwd()):
-    if file.endswith(".jar"):
-        listOfJars.append(file)
-
-for jarfile in listOfJars:
-	sha1sum = findSha1sumHash(jarfile)
-	listOfDictsOfJarsAndSha1Sum.append({'Jar': jarfile.rstrip('.jar'), 'sha1sum': sha1sum})
-
-# Loops through Checksum and insert sha1sum into standard url to obtain JSON object which is
-# processed into a dictionary (see checkSha1sumAgainstRepo) which is appended to a list
-
-listOfDicts = []
-for totalDict in listOfDictsOfJarsAndSha1Sum:
-    listOfDicts.append(checkSha1sumAgainstRepo(totalDict['sha1sum']))
-
-# Make final list of dicts containing
-# Jar, groupId, artifactId, version, date, type, sha1sum
-
-finalCorrectlyFormatedListOfDicts = []
-for checksumedDict, rawDataDict in zip(listOfDicts, listOfDictsOfJarsAndSha1Sum):
-	finalCorrectlyFormatedListOfDicts.append({
-		'Jar': rawDataDict['Jar'],
-		'groupId': checksumedDict['groupId'],
-		'artifactId': checksumedDict['artifactId'],
-		'version': checksumedDict['version'],
-		'Release Date': checksumedDict['date uploaded'],
-		'type': checksumedDict['filetype'],
-		'sha1sum': rawDataDict['sha1sum']
+def concatDictsInDataFrame(rawDataList, collectedDataList):
+	finalCorrectlyFormatedListOfDicts = []
+	for collectedData, rawData in zip(collectedDataList, rawDataList):
+		finalCorrectlyFormatedListOfDicts.append({
+			'File': rawData['File'],
+			'groupId': collectedData['groupId'],
+			'artifactId': collectedData['artifactId'],
+			'version': collectedData['version'],
+			'Release Date': collectedData['date uploaded'],
+			'sha1sum': rawData['sha1sum']
 		})
+	return finalCorrectlyFormatedListOfDicts
 
 
-# Concats raw data with found data to make result
-dfResult = pd.DataFrame(finalCorrectlyFormatedListOfDicts)
+def main():
+	targetDirectory = os.getcwd()
+	test = True
+	# Can argparse be in a function?
+	parser = argparse.ArgumentParser()
+	parser.add_argument("-t", "--test",
+						help="Test option: does not write file only show example output of file for current directory.\n"
+							 + " If there are no jars etc. in the current directory the test header will be empty will be empty.",
+						action="store_true")
+	parser.add_argument("-d", "--directory", type=str, help="Sets target directory by path you provide after option.")
+	parser.add_argument("-v", "--verbose", help="increases verbosity", action="store_true")
+	parser.add_argument("-r", "--recursive", type=int, help="Recursive search with max depth")
+	args = parser.parse_args()
+	if args.directory:
+		targetDirectory = os.path.join(targetDirectory, args.directory)
+	if args.verbose:
+		print("Target directory set to \"{}\".".format(targetDirectory))
 
-# save pandas dataframe to a csv that you can name
-defaultFileName = "jarInFolderInformation"
-filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\n".format(defaultFileName)))
-filename = filename + ".csv"
+	# no options is only current directory
+	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running #
+	# -v verbose
+	# -f to check wanted file types by listing them after
+	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10
+	# -d targets a directory, followed by directory path, if omitted fails #
+	# -h is help
+	listRawData = find_wanted_files_in_directories(targetDirectory, args)
+	listFoundDictData = []
+	for dictRawData in listRawData:
+		listFoundDictData.append(checkSha1sumAgainstRepo(dictRawData['sha1sum']))
+	resultList = concatDictsInDataFrame(listRawData, listFoundDictData)
+	dfResult = pd.DataFrame(resultList)
+	if args.test:
+		print('Testing, nothing will be saved')
+		print(dfResult.head())
+	else:
+		# save pandas dataframe to a csv that you can name
+		defaultFileName = "jarInFolderInformation"
+		filename = str(input(
+			"What do you want to call this csv? Default=[{}]; .csv extention not needed\nEnter \'q\' to quit without saving.\n".format(
+				defaultFileName)))
+		if filename == 'q':
+			sys.exit(0)
+		if not filename:
+			filename = defaultFileName
+		filename = filename + ".csv"
+		with open(filename, "w+") as outFile:
+			dfResult.to_csv(filename, sep="\t")
 
-with open(filename, "w+") as outFile:
-	dfResult.to_csv(filename, sep="\t")
 
-
-
+if __name__ == "__main__":
+	main()
 
 """ 
 	Maven central repo:
