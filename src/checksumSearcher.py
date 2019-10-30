@@ -11,7 +11,7 @@
 	Version 2.0: Using only python script
 """
 
-#------- IN TESTING AND EARLY DEV STAGE
+# ------- IN TESTING AND EARLY DEV STAGE
 
 # import statements
 import requests
@@ -20,9 +20,6 @@ import pandas as pd
 import sys, argparse
 import os
 import hashlib
-from pathlib import Path
-
-
 
 def findSha1sumHash(pathAndFile):
 	"""Hashes files with sha 1 sum and returns it"""
@@ -37,25 +34,37 @@ def findSha1sumHash(pathAndFile):
 					buf = afile.read(BLOCKSIZE)
 			except:
 				print('{} too large, cannot hash so will be empty in final csv\n'.format(pathAndFile))
-				return '0'*40
+				return '0' * 40
 	except OSError:
 		print('Did not find file {}, continuing'.format(pathAndFile))
 	return str(hasher.hexdigest())
 
-def findWantedFilesInDirectory(directory, args, wantedFileTypes=['.jar', '.ear', '.war']):
+
+def find_wanted_files_in_directories(root_dir, args):
+	if args.recursive:
+		return find_wanted_files_in_directory(root_dir, args, args.recursive)
+	else:
+		return find_wanted_files_in_directory(root_dir, args)
+
+
+def find_wanted_files_in_directory(directory, args, depth=0, wantedFileTypes=['.jar', '.ear', '.war']):
 	"""Finds all wanted file types in a directory and makes a list of dictionaries with their names and sha 1 sums"""
-	fileAndSha1sumDict = []
+	find_sha1_sum_dict = []
 	try:
-		for file in os.listdir(directory):
-			for wantedFileType in wantedFileTypes:
-				if file.endswith(wantedFileType):
-					if args.verbose:
-						print('Adding {}'.format(file))
-					sha1sum = findSha1sumHash(os.path.join(directory, file))
-					fileAndSha1sumDict.append({'File': file, 'sha1sum': sha1sum})
+		for entry in os.scandir(directory):
+			if entry.is_dir(follow_symlinks=False):
+				if depth > 0:
+					find_sha1_sum_dict.extend(find_wanted_files_in_directory(entry.path, args, depth - 1))
+			elif entry.is_file(follow_symlinks=False):
+				for wantedFileType in wantedFileTypes:
+					if entry.name.endswith(wantedFileType):
+						if args.verbose:
+							print('Adding {}'.format(entry.name))
+						sha1sum = findSha1sumHash(os.path.join(directory, entry.name))
+						find_sha1_sum_dict.append({'File': entry.name, 'sha1sum': sha1sum})
 	except OSError:
 		print('Directory {} not found, continuing.'.format(directory))
-	return fileAndSha1sumDict
+	return find_sha1_sum_dict
 
 
 def checkSha1sumAgainstRepo(sha1sum):
@@ -66,24 +75,24 @@ def checkSha1sumAgainstRepo(sha1sum):
 	if json_data['response']['numFound'] == 0:
 		# This means something went wrong.
 		return {"groupId": "not found",
-			"artifactId": "not found",
-			"version": "not found",
-			"filetype": "not found",
-			"date uploaded": "not found"}
+				"artifactId": "not found",
+				"version": "not found",
+				"filetype": "not found",
+				"date uploaded": "not found"}
 	docs = json_data['response']['docs'][0]
 	groupId = docs['g']
 	artifactId = docs['a']
 	version = docs['v']
 	filetype = docs['p']
-	timestamp = docs['timestamp']/1000
+	timestamp = docs['timestamp'] / 1000
 	# convert timestamp into date format month-year
-	date = datetime.fromtimestamp(timestamp) 
+	date = datetime.fromtimestamp(timestamp)
 	dateString = date.strftime("%M-%Y")
 	return {"groupId": groupId,
-		"artifactId": artifactId,
-		"version": version,
-		"filetype": filetype,
-		"date uploaded": dateString}
+			"artifactId": artifactId,
+			"version": version,
+			"filetype": filetype,
+			"date uploaded": dateString}
 
 
 def concatDictsInDataFrame(rawDataList, collectedDataList):
@@ -96,18 +105,19 @@ def concatDictsInDataFrame(rawDataList, collectedDataList):
 			'version': collectedData['version'],
 			'Release Date': collectedData['date uploaded'],
 			'sha1sum': rawData['sha1sum']
-			})
+		})
 	return finalCorrectlyFormatedListOfDicts
+
 
 def main():
 	targetDirectory = os.getcwd()
-	recursiveDepth=1
 	test = True
-	#Can argparse be in a function?
+	# Can argparse be in a function?
 	parser = argparse.ArgumentParser()
-	parser.add_argument("-t", "--test", help="Test option: does not write file only show example output of file for current directory.\n" 
-						+ " If there are no jars etc. in the current directory the test header will be empty will be empty.",
-                    action="store_true")
+	parser.add_argument("-t", "--test",
+						help="Test option: does not write file only show example output of file for current directory.\n"
+							 + " If there are no jars etc. in the current directory the test header will be empty will be empty.",
+						action="store_true")
 	parser.add_argument("-d", "--directory", type=str, help="Sets target directory by path you provide after option.")
 	parser.add_argument("-v", "--verbose", help="increases verbosity", action="store_true")
 	parser.add_argument("-r", "--recursive", type=int, help="Recursive search with max depth")
@@ -121,10 +131,10 @@ def main():
 	# -t is test, uses target directory (either current or directed with -d) shows result and deletes the contents after running #
 	# -v verbose
 	# -f to check wanted file types by listing them after
-	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10 
+	# -r is recursive, number after shows max depth, if omitted recursive depth is set to 10
 	# -d targets a directory, followed by directory path, if omitted fails #
 	# -h is help
-	listRawData = findWantedFilesInDirectory(targetDirectory, args)
+	listRawData = find_wanted_files_in_directories(targetDirectory, args)
 	listFoundDictData = []
 	for dictRawData in listRawData:
 		listFoundDictData.append(checkSha1sumAgainstRepo(dictRawData['sha1sum']))
@@ -136,7 +146,9 @@ def main():
 	else:
 		# save pandas dataframe to a csv that you can name
 		defaultFileName = "jarInFolderInformation"
-		filename = str(input("What do you want to call this csv? Default=[{}]; .csv extention not needed\nEnter \'q\' to quit without saving.\n".format(defaultFileName)))
+		filename = str(input(
+			"What do you want to call this csv? Default=[{}]; .csv extention not needed\nEnter \'q\' to quit without saving.\n".format(
+				defaultFileName)))
 		if filename == 'q':
 			sys.exit(0)
 		if not filename:
@@ -146,14 +158,8 @@ def main():
 			dfResult.to_csv(filename, sep="\t")
 
 
-	
-
-
 if __name__ == "__main__":
 	main()
-
-
-
 
 """ 
 	Maven central repo:
@@ -216,4 +222,3 @@ if __name__ == "__main__":
 	}
 }
 """
-
